@@ -72,13 +72,15 @@ write_client_config() {
     {
       printf '[client]\n'
       printf 'host=%s\nport=%s\nuser=%s\npassword="%s"\n' "${BACKUP_DB_HOST}" "${DB_PORT}" "${BACKUP_DB_USER}" "${password}"
-      printf 'protocol=TCP\nconnect-timeout=10\n'
+      printf 'protocol=TCP\n'
       case "${TLS_MODE}" in
         # MariaDB 11.4+ clients verify the server's self-signed certificate through the password.
         verify) printf 'ssl\n' ;;
         require) printf 'ssl\nssl-verify-server-cert=0\n' ;;
         off) printf 'skip-ssl\n' ;;
       esac
+      # mariadb-dump rejects connect-timeout, so it goes only to the clients that know it.
+      printf '[mysql]\nconnect-timeout=10\n[mysqladmin]\nconnect-timeout=10\n'
     } > "${CNF}"
   )
 }
