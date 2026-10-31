@@ -1,0 +1,350 @@
+{
+  "name": "MariaDB 12.3 LTS with phpMyAdmin and Backups",
+  "description": "MySQL-compatible MariaDB LTS, tuned, with phpMyAdmin and daily backups.",
+  "category": "Storage",
+  "tags": [
+    "mariadb",
+    "mysql",
+    "database",
+    "sql",
+    "phpmyadmin",
+    "backups",
+    "lts"
+  ],
+  "image": "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/mariadb.svg",
+  "upstream": {
+    "mariadb": "mariadb:12.3.3 (MariaDB Server 12.3.3, LTS series 12.3, GA 2026-05-28, community EOL 2029-06-12; image digest sha256:d46e102fa8b9b72bfcdeb56f9dd538742092119dc8b11f31fe662605cd234cd9, built 2026-10-26)",
+    "phpmyadmin": "phpmyadmin:5.2.3-apache (phpMyAdmin 5.2.3 on PHP 8.3.36; image digest sha256:fb0cb638f7d1c2529407921d86679b2b2faf5bb8542314821e9f16e7e3d2954f, built 2026-10-28)",
+    "backup": "FROM mariadb:12.3.3 + rclone 1.75.2 (rclone/rclone:1.75.2, sha256:2687085f718d3c628f7fdfb77c52a1d344332aed543110bb88088f2c70d43eb5)",
+    "checked": "2026-10-31"
+  },
+  "services": {
+    "MariaDB": {
+      "icon": "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/mariadb.svg",
+      "source": {
+        "image": "mariadb:12.3.3"
+      },
+      "startCommand": "/bin/bash -c 'set -e; F=/etc/mysql/conf.d/zz-railway.cnf; X=/tmp/zz-railway.cnf; k() { v=$1; if [ $v -lt $2 ]; then v=$2; fi; if [ $v -gt $3 ]; then v=$3; fi; echo $v; }; n() { case \"$1\" in \"\"|*[!0-9]*) echo $2 ;; *) echo $1 ;; esac; }; w() { echo \"$1 = $2\" >> $X; }; echo \"# Railway template: rewritten at every boot from the DB_* variables; DB_EXTRA_ARGS overrides it\" > $X; echo \"[mariadbd]\" >> $X; COL=\"${DB_COLLATION:-utf8mb4_unicode_ci}\"; case \"$COL\" in utf8mb4_) COL=bad ;; utf8mb4_*[!a-z0-9_]*) COL=bad ;; utf8mb4_*) ;; *) COL=bad ;; esac; if [ \"$COL\" = bad ]; then echo \"mariadb-tune: DB_COLLATION=${DB_COLLATION} is not a utf8mb4 collation name, using utf8mb4_unicode_ci\"; COL=utf8mb4_unicode_ci; fi; w character_set_server utf8mb4; w collation_server $COL; if [ \"$COL\" != utf8mb4_uca1400_ai_ci ]; then w character_set_collations utf8mb4=$COL; fi; w max_allowed_packet 64M; w innodb_use_native_aio 0; w ignore_db_dirs lost+found; case \"${DB_SLOW_QUERY_LOG:-off}\" in on|ON|On|true|TRUE|True|yes|1) SLOW=on ;; *) SLOW=off ;; esac; if [ $SLOW = on ]; then LQT=\"${DB_LONG_QUERY_TIME:-2}\"; case \"$LQT\" in \"\"|.|*[!0-9.]*|*.*.*) LQT=2 ;; esac; w log_output TABLE; w log_slow_query ON; w log_slow_query_time $LQT; fi; if [ \"${DB_TUNING:-auto}\" = off ]; then echo \"mariadb-tune: DB_TUNING=off, MariaDB defaults apply to memory and connections\"; else H=$(( $(n \"$(grep -m 1 MemTotal /proc/meminfo | tr -s \" \" | cut -d \" \" -f 2)\" 1048576) / 1024 )); L=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || echo max); M=$(( $(n \"$L\" $((H * 1048576))) / 1048576 )); if [ $M -gt $H ]; then M=$H; fi; B=$(k $(n \"$DB_MEMORY_LIMIT_MB\" $(k $M 256 8192)) 256 4194304); P=$(k $(n \"$DB_BUFFER_POOL_MB\" $(k $((B / 2)) 128 2097152)) 32 4194304); C=$(k $(n \"$DB_MAX_CONNECTIONS\" $(k $((B / 8)) 100 500)) 10 100000); T=$(k $((B / 64)) 16 64); w innodb_buffer_pool_size ${P}M; w innodb_log_file_size $(k $((P / 4)) 96 512)M; w max_connections $C; w tmp_table_size ${T}M; w max_heap_table_size ${T}M; w innodb_io_capacity 1000; w innodb_io_capacity_max 2000; echo \"mariadb-tune: budget ${B}MB (container ${M}MB, host ${H}MB)\"; fi; mkdir -p /etc/mysql/conf.d; install -m 644 $X $F; echo \"mariadb-tune: $(grep -v \"^#\" $X | paste -sd \" \" -)\"; set -f; exec docker-entrypoint.sh \"$@\" ${DB_EXTRA_ARGS:-}' mariadb-start mariadbd",
+      "preDeployCommand": null,
+      "healthcheckPath": null,
+      "healthcheckTimeout": null,
+      "restartPolicyType": "ON_FAILURE",
+      "restartPolicyMaxRetries": 10,
+      "numReplicas": 1,
+      "cronSchedule": null,
+      "publicDomain": false,
+      "targetPort": null,
+      "tcpProxy": {
+        "port": 3306
+      },
+      "volume": {
+        "mountPath": "/var/lib/mysql"
+      },
+      "variables": {
+        "MARIADB_ROOT_PASSWORD": {
+          "defaultValue": "${{secret(32, \"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\")}}",
+          "description": "Root password, generated at deploy (letters and digits, URL-safe). Used by the backup job. Changing it later needs ALTER USER as well.",
+          "required": true
+        },
+        "MARIADB_DATABASE": {
+          "defaultValue": "railway",
+          "description": "Database created on first boot (the app database).",
+          "required": true
+        },
+        "MARIADB_USER": {
+          "defaultValue": "railway",
+          "description": "App user created on first boot with all privileges on MARIADB_DATABASE only.",
+          "required": true
+        },
+        "MARIADB_PASSWORD": {
+          "defaultValue": "${{secret(32, \"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\")}}",
+          "description": "App user password, generated at deploy. Changing it later needs ALTER USER as well.",
+          "required": true
+        },
+        "MARIADB_URL": {
+          "defaultValue": "mariadb://${{MARIADB_USER}}:${{MARIADB_PASSWORD}}@${{RAILWAY_PRIVATE_DOMAIN}}:3306/${{MARIADB_DATABASE}}",
+          "description": "Private connection URL with the mariadb:// scheme (MariaDB Node.js/Python connectors).",
+          "required": false
+        },
+        "MARIADB_PUBLIC_URL": {
+          "defaultValue": "mariadb://${{MARIADB_USER}}:${{MARIADB_PASSWORD}}@${{RAILWAY_TCP_PROXY_DOMAIN}}:${{RAILWAY_TCP_PROXY_PORT}}/${{MARIADB_DATABASE}}",
+          "description": "Connection URL from outside Railway through the TCP proxy (egress is billed).",
+          "required": false
+        },
+        "MYSQL_ROOT_PASSWORD": {
+          "defaultValue": "${{MARIADB_ROOT_PASSWORD}}",
+          "description": "Same as MARIADB_ROOT_PASSWORD, under Railway MySQL's name.",
+          "required": false
+        },
+        "MYSQL_DATABASE": {
+          "defaultValue": "${{MARIADB_DATABASE}}",
+          "description": "Same as MARIADB_DATABASE, under Railway MySQL's name.",
+          "required": false
+        },
+        "MYSQLHOST": {
+          "defaultValue": "${{RAILWAY_PRIVATE_DOMAIN}}",
+          "description": "Private hostname of this database (mariadb.railway.internal). Used by the Data panel and other services.",
+          "required": false
+        },
+        "MYSQLPORT": {
+          "defaultValue": "3306",
+          "description": "MariaDB port (private network).",
+          "required": false
+        },
+        "MYSQLUSER": {
+          "defaultValue": "${{MARIADB_USER}}",
+          "description": "User for the Data panel and the MYSQL_* URLs (the app user, not root).",
+          "required": false
+        },
+        "MYSQLPASSWORD": {
+          "defaultValue": "${{MARIADB_PASSWORD}}",
+          "description": "Password of MYSQLUSER.",
+          "required": false
+        },
+        "MYSQLDATABASE": {
+          "defaultValue": "${{MARIADB_DATABASE}}",
+          "description": "Default database for the Data panel and the MYSQL_* URLs.",
+          "required": false
+        },
+        "MYSQL_URL": {
+          "defaultValue": "mysql://${{MYSQLUSER}}:${{MYSQLPASSWORD}}@${{RAILWAY_PRIVATE_DOMAIN}}:3306/${{MYSQLDATABASE}}",
+          "description": "Private connection URL, same name and format as Railway MySQL. Reference it as ${{MariaDB.MYSQL_URL}}.",
+          "required": false
+        },
+        "MYSQL_PUBLIC_URL": {
+          "defaultValue": "mysql://${{MYSQLUSER}}:${{MYSQLPASSWORD}}@${{RAILWAY_TCP_PROXY_DOMAIN}}:${{RAILWAY_TCP_PROXY_PORT}}/${{MYSQLDATABASE}}",
+          "description": "Connection URL from outside Railway through the TCP proxy, same name as Railway MySQL (egress is billed).",
+          "required": false
+        },
+        "MARIADB_AUTO_UPGRADE": {
+          "defaultValue": "1",
+          "description": "Run mariadb-upgrade (after a backup of the system tables) when the image version changes. Read by the image's entrypoint.",
+          "required": false
+        },
+        "RAILWAY_DEPLOYMENT_DRAINING_SECONDS": {
+          "defaultValue": "60",
+          "description": "Time MariaDB gets to shut down cleanly (flush InnoDB, save the buffer pool list) on redeploy.",
+          "required": true
+        },
+        "DB_TUNING": {
+          "defaultValue": "auto",
+          "description": "auto = size buffer pool, redo log, connections and temp tables from the container memory limit at every boot; off = MariaDB defaults.",
+          "required": false
+        },
+        "DB_MEMORY_LIMIT_MB": {
+          "defaultValue": "auto",
+          "description": "RAM the tuning plans for. auto = the container limit capped at 8192 MB; set a number after resizing the service.",
+          "required": false
+        },
+        "DB_BUFFER_POOL_MB": {
+          "defaultValue": "auto",
+          "description": "InnoDB buffer pool in MB. auto = half of DB_MEMORY_LIMIT_MB (memory is used only as data is read).",
+          "required": false
+        },
+        "DB_MAX_CONNECTIONS": {
+          "defaultValue": "auto",
+          "description": "max_connections. auto = DB_MEMORY_LIMIT_MB / 8, between 100 and 500.",
+          "required": false
+        },
+        "DB_COLLATION": {
+          "defaultValue": "utf8mb4_unicode_ci",
+          "description": "Server collation (charset is always utf8mb4). utf8mb4_unicode_ci works with every MySQL client; utf8mb4_uca1400_ai_ci is MariaDB's newer default.",
+          "required": false
+        },
+        "DB_SLOW_QUERY_LOG": {
+          "defaultValue": "off",
+          "description": "on = log queries slower than DB_LONG_QUERY_TIME to the mysql.slow_log table.",
+          "required": false
+        },
+        "DB_LONG_QUERY_TIME": {
+          "defaultValue": "2",
+          "description": "Slow query threshold in seconds (decimals allowed), used when DB_SLOW_QUERY_LOG=on.",
+          "required": false
+        },
+        "DB_EXTRA_ARGS": {
+          "defaultValue": "",
+          "description": "Extra mariadbd options appended to the command line, space-separated (e.g. --sql-mode=TRADITIONAL). They override the tuning file.",
+          "required": false
+        }
+      }
+    },
+    "phpMyAdmin": {
+      "icon": "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/phpmyadmin.svg",
+      "source": {
+        "image": "phpmyadmin:5.2.3-apache"
+      },
+      "startCommand": "/bin/bash -c 'set -e; n() { case \"$1\" in \"\"|*[!0-9]*) echo $2 ;; *) echo $1 ;; esac; }; E=/etc/apache2/mods-enabled; N=$(ls $E/mpm_*.load 2>/dev/null | wc -l | tr -d \" \"); if [ \"$N\" -ne 1 ] || [ ! -e $E/mpm_prefork.load ]; then echo \"pma-start: $N Apache MPM modules enabled, keeping mpm_prefork only\"; rm -f $E/mpm_*.load $E/mpm_*.conf; a2enmod -q mpm_prefork; fi; W=$(n \"$PMA_APACHE_WORKERS\" 10); if [ $W -lt 2 ]; then W=2; fi; if [ $W -gt 256 ]; then W=256; fi; A=/etc/apache2/conf-enabled/zz-railway.conf; echo \"ServerTokens Prod\" > $A; echo \"ServerSignature Off\" >> $A; echo \"<IfModule mpm_prefork_module>\" >> $A; echo \"StartServers 2\" >> $A; echo \"MinSpareServers 1\" >> $A; echo \"MaxSpareServers 4\" >> $A; echo \"ServerLimit $W\" >> $A; echo \"MaxRequestWorkers $W\" >> $A; echo \"MaxConnectionsPerChild 500\" >> $A; echo \"</IfModule>\" >> $A; I=\"${PHP_INI_DIR:-/usr/local/etc/php}/conf.d/zz-railway.ini\"; echo \"display_errors = Off\" > $I; echo \"log_errors = On\" >> $I; echo \"expose_php = Off\" >> $I; echo \"pma-start: Apache prefork MaxRequestWorkers $W, PMA_HOST ${PMA_HOST:-unset}:${PMA_PORT:-3306}, root login ${PMA_ALLOW_ROOT:-false}\"; exec /docker-entrypoint.sh apache2-foreground' pma-start",
+      "preDeployCommand": null,
+      "healthcheckPath": "/",
+      "healthcheckTimeout": 120,
+      "restartPolicyType": "ON_FAILURE",
+      "restartPolicyMaxRetries": 10,
+      "numReplicas": 1,
+      "cronSchedule": null,
+      "publicDomain": true,
+      "targetPort": 80,
+      "tcpProxy": null,
+      "volume": null,
+      "variables": {
+        "PORT": {
+          "defaultValue": "80",
+          "description": "Port Apache listens on; the public domain and the healthcheck use it.",
+          "required": false
+        },
+        "PMA_HOST": {
+          "defaultValue": "${{MariaDB.RAILWAY_PRIVATE_DOMAIN}}",
+          "description": "MariaDB host on the private network; phpMyAdmin is pre-connected to it.",
+          "required": false
+        },
+        "PMA_PORT": {
+          "defaultValue": "${{MariaDB.MYSQLPORT}}",
+          "description": "MariaDB port.",
+          "required": false
+        },
+        "PMA_ALLOW_ROOT": {
+          "defaultValue": "false",
+          "description": "true allows the MariaDB root account to log in through the web UI. Keep false and log in as the app user unless you need server-wide admin.",
+          "required": false
+        },
+        "PMA_APACHE_WORKERS": {
+          "defaultValue": "10",
+          "description": "Maximum concurrent Apache/PHP workers (each up to MEMORY_LIMIT). Raise for many simultaneous users.",
+          "required": false
+        },
+        "UPLOAD_LIMIT": {
+          "defaultValue": "64M",
+          "description": "Largest file the Import tab accepts (PHP upload and POST size).",
+          "required": false
+        },
+        "MEMORY_LIMIT": {
+          "defaultValue": "512M",
+          "description": "PHP memory limit per request (imports and exports of large tables).",
+          "required": false
+        },
+        "HIDE_PHP_VERSION": {
+          "defaultValue": "true",
+          "description": "Do not send the PHP version in HTTP headers.",
+          "required": false
+        },
+        "PMA_USER_CONFIG_BASE64": {
+          "defaultValue": "PD9waHAKLyoKICogcGhwTXlBZG1pbiBzZXR0aW5ncyBhZGRlZCBieSB0aGUgUmFpbHdheSB0ZW1wbGF0ZSAiTWFyaWFEQiAxMi4zIExUUyB3aXRoCiAqIHBocE15QWRtaW4gYW5kIEJhY2t1cHMiLgogKgogKiBUaGUgb2ZmaWNpYWwgaW1hZ2UncyAvZXRjL3BocG15YWRtaW4vY29uZmlnLmluYy5waHAgY29uZmlndXJlcyBvbmUgc2VydmVyCiAqIGZyb20gUE1BX0hPU1QgLyBQTUFfUE9SVCAoY29va2llIGxvZ2luLCBhcmJpdHJhcnkgc2VydmVycyBvbmx5IHdoZW4KICogUE1BX0FSQklUUkFSWT0xKSBhbmQgdGhlbiBpbmNsdWRlcyAvZXRjL3BocG15YWRtaW4vY29uZmlnLnVzZXIuaW5jLnBocCB3aXRoCiAqICRpIHBvaW50aW5nIGF0IHRoYXQgc2VydmVyLiBUaGUgaW1hZ2UncyBlbnRyeXBvaW50IHdyaXRlcyB0aGlzIGZpbGUgdGhlcmUKICogZnJvbSB0aGUgUE1BX1VTRVJfQ09ORklHX0JBU0U2NCB2YXJpYWJsZSBhdCBldmVyeSBzdGFydC4KICoKICogRWRpdCB0aGlzIGZpbGUsIHRoZW4gcnVuIGBweXRob24zIHRvLXRlbXBsYXRlLnB5IC0td3JpdGVgIHRvIHJlZnJlc2gKICogUE1BX1VTRVJfQ09ORklHX0JBU0U2NCBpbiB0ZW1wbGF0ZS5qc29uLgogKi8KCiRyYWlsd2F5RW52VHJ1ZSA9IFsnMScsICd0cnVlJywgJ3llcycsICdvbiddOwoKLyogTWFyaWFEQidzIHJvb3QgYWNjb3VudCBjYW5ub3QgbG9nIGluIHRocm91Z2ggdGhlIHdlYiBVSSB1bmxlc3MgUE1BX0FMTE9XX1JPT1Q9dHJ1ZS4gKi8KJGNmZ1snU2VydmVycyddWyRpXVsnQWxsb3dSb290J10gPSBpbl9hcnJheSgKICAgIHN0cnRvbG93ZXIodHJpbSgoc3RyaW5nKSBnZXRlbnYoJ1BNQV9BTExPV19ST09UJykpKSwKICAgICRyYWlsd2F5RW52VHJ1ZSwKICAgIHRydWUKKTsKCi8qIEV2ZXJ5IGxvZ2luIG5lZWRzIGEgcGFzc3dvcmQgKHRoZSBpbWFnZSdzIGNvbmZpZy5pbmMucGhwIGFsbG93cyBlbXB0eSBvbmVzKS4gKi8KJGNmZ1snU2VydmVycyddWyRpXVsnQWxsb3dOb1Bhc3N3b3JkJ10gPSBmYWxzZTsKCi8qIE5ldmVyIG9mZmVyIGEgZnJlZS10ZXh0IHNlcnZlciBmaWVsZCwgd2hhdGV2ZXIgUE1BX0FSQklUUkFSWSBzYXlzLiAqLwokY2ZnWydBbGxvd0FyYml0cmFyeVNlcnZlciddID0gZmFsc2U7CgovKiBEbyBub3Qgc2hvdyBNYXJpYURCIGhvc3QgbmFtZXMgb3IgZHJpdmVyIGVycm9ycyBvbiB0aGUgbG9naW4gcGFnZS4gKi8KJGNmZ1snU2VydmVycyddWyRpXVsnaGlkZV9jb25uZWN0aW9uX2Vycm9ycyddID0gdHJ1ZTsKCi8qIEZhaWxlZCBsb2dpbnMgYXJlIHdyaXR0ZW4gdG8gdGhlIHNlcnZpY2UgbG9nICgidXNlciBkZW5pZWQ6IC4uLiIpLiAqLwokY2ZnWydBdXRoTG9nJ10gPSAncGhwJzsKJGNmZ1snQXV0aExvZ1N1Y2Nlc3MnXSA9IGZhbHNlOwoKLyogTm8gZXJyb3IgcmVwb3J0cyB0byBwaHBteWFkbWluLm5ldCwgbm8gR2l0IHJldmlzaW9uIG9yIHBocGluZm8oKSBpbiB0aGUgVUkuICovCiRjZmdbJ1NlbmRFcnJvclJlcG9ydHMnXSA9ICduZXZlcic7CiRjZmdbJ1Nob3dHaXRSZXZpc2lvbiddID0gZmFsc2U7CiRjZmdbJ1Nob3dQaHBJbmZvJ10gPSBmYWxzZTsKCnVuc2V0KCRyYWlsd2F5RW52VHJ1ZSk7Cg==",
+          "description": "Template hardening for phpMyAdmin (root login switch, no empty passwords, no arbitrary servers, failed logins logged). Base64 of config.user.inc.php in the template repo; the image writes it at start.",
+          "required": false
+        }
+      }
+    },
+    "MariaDB Backup": {
+      "icon": "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/rclone.svg",
+      "source": {
+        "repo": "baranberkay96/mariadb-railway",
+        "rootDirectory": "/services/backup"
+      },
+      "startCommand": null,
+      "preDeployCommand": null,
+      "healthcheckPath": null,
+      "healthcheckTimeout": null,
+      "restartPolicyType": "NEVER",
+      "numReplicas": 1,
+      "cronSchedule": "30 3 * * *",
+      "publicDomain": false,
+      "targetPort": null,
+      "tcpProxy": null,
+      "volume": null,
+      "variables": {
+        "BACKUP_DB_HOST": {
+          "defaultValue": "${{MariaDB.RAILWAY_PRIVATE_DOMAIN}}",
+          "description": "MariaDB private hostname.",
+          "required": true
+        },
+        "BACKUP_DB_PORT": {
+          "defaultValue": "${{MariaDB.MYSQLPORT}}",
+          "description": "MariaDB port.",
+          "required": true
+        },
+        "BACKUP_DB_USER": {
+          "defaultValue": "root",
+          "description": "Account used for the dumps; root is needed to read every database and the account list.",
+          "required": true
+        },
+        "BACKUP_DB_PASSWORD": {
+          "defaultValue": "${{MariaDB.MARIADB_ROOT_PASSWORD}}",
+          "description": "Password of that account (kept in sync by reference).",
+          "required": true
+        },
+        "BACKUP_TLS": {
+          "defaultValue": "verify",
+          "description": "verify = TLS with MariaDB's password-based certificate check; require = TLS without the check; off = plain TCP (private network only).",
+          "required": false
+        },
+        "BACKUP_S3_BUCKET": {
+          "defaultValue": "${{Bucket.BUCKET}}",
+          "description": "Railway Bucket that stores the backups.",
+          "required": true
+        },
+        "BACKUP_S3_ENDPOINT": {
+          "defaultValue": "${{Bucket.ENDPOINT}}",
+          "description": "Bucket S3 endpoint.",
+          "required": true
+        },
+        "BACKUP_S3_REGION": {
+          "defaultValue": "${{Bucket.REGION}}",
+          "description": "Bucket region.",
+          "required": true
+        },
+        "BACKUP_S3_ACCESS_KEY_ID": {
+          "defaultValue": "${{Bucket.ACCESS_KEY_ID}}",
+          "description": "Bucket access key.",
+          "required": true
+        },
+        "BACKUP_S3_SECRET_ACCESS_KEY": {
+          "defaultValue": "${{Bucket.SECRET_ACCESS_KEY}}",
+          "description": "Bucket secret key.",
+          "required": true
+        },
+        "BACKUP_S3_FORCE_PATH_STYLE": {
+          "defaultValue": "false",
+          "description": "Keep false: Railway Buckets use virtual-hosted-style URLs. true only for buckets whose Credentials tab says path-style.",
+          "required": false
+        },
+        "BACKUP_PREFIX": {
+          "defaultValue": "mariadb",
+          "description": "Folder in the bucket; each run writes {prefix}/{UTC timestamp}/.",
+          "required": false
+        },
+        "BACKUP_DATABASES": {
+          "defaultValue": "",
+          "description": "Databases to dump, comma-separated. Empty = every database except information_schema, performance_schema, sys and mysql.",
+          "required": false
+        },
+        "BACKUP_RETENTION_DAYS": {
+          "defaultValue": "14",
+          "description": "Delete complete runs older than this many days.",
+          "required": false
+        },
+        "BACKUP_KEEP_MIN": {
+          "defaultValue": "3",
+          "description": "Always keep at least this many complete runs, whatever their age.",
+          "required": false
+        },
+        "BACKUP_ZSTD_LEVEL": {
+          "defaultValue": "3",
+          "description": "zstd compression level, 1 (fast) to 19 (small).",
+          "required": false
+        },
+        "BACKUP_VERIFY": {
+          "defaultValue": "true",
+          "description": "true = read each dump back from the bucket and check its zstd checksums and the mariadb-dump footer.",
+          "required": false
+        },
+        "BACKUP_WAIT_SECONDS": {
+          "defaultValue": "300",
+          "description": "How long a run waits for MariaDB to accept connections before failing.",
+          "required": false
+        }
+      }
+    }
+  },
+  "buckets": [
+    "Bucket"
+  ]
+}
